@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -10,8 +11,29 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Инициализация БД для тестов (обычно уже есть в каркасе)
-func InitTestStore(t *testing.T) ParcelStore {
+var (
+	// randSource источник псевдо случайных чисел.
+	// Для повышения уникальности в качестве seed
+	// используется текущее время в unix формате (в виде числа)
+	randSource = rand.NewSource(time.Now().UnixNano())
+	// randRange использует randSource для генерации случайных чисел
+	randRange = rand.New(randSource)
+)
+
+// getTestParcel возвращает тестовую посылку
+func getTestParcel() Parcel {
+	return Parcel{
+		Client:    1000,
+		Status:    ParcelStatusRegistered,
+		Address:   "test",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// initTestStore настраивает подключение к БД и возвращает готовый ParcelStore.
+// Функция не экспортируется, т.к. используется только внутри тестового файла,
+// и закрывает соединение с БД автоматически по завершении теста.
+func initTestStore(t *testing.T) ParcelStore {
 	db, err := sql.Open("sqlite", "tracker.db")
 	require.NoError(t, err)
 
@@ -23,104 +45,120 @@ func InitTestStore(t *testing.T) ParcelStore {
 	return NewParcelStore(db)
 }
 
-// TestAddGetByClient проверяет добавление и получение посылки
-func TestAddGetByClient(t *testing.T) {
-	store := InitTestStore(t)
+// TestAddGetDelete проверяет добавление, получение и удаление посылки
+func TestAddGetDelete(t *testing.T) {
+	// prepare
+	store := initTestStore(t)
+	parcel := getTestParcel()
 
-	// Данные тестовой посылки
-	parcel := Parcel{
-		Client:    1001,
-		Status:    ParcelStatusRegistered,
-		Address:   "Тестовый адрес",
-		CreatedAt: time.Now().Format(time.RFC3339),
-	}
-
-	// 1. Добавляем посылку
+	// add
 	id, err := store.Add(parcel)
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 	parcel.Number = id
 
-	// 2. Получаем добавленную посылку по идентификатору
+	// get
 	stored, err := store.Get(id)
 	require.NoError(t, err)
-
-	// 3. Проверяем, что данные совпадают
 	assert.Equal(t, parcel.Client, stored.Client)
 	assert.Equal(t, parcel.Status, stored.Status)
 	assert.Equal(t, parcel.Address, stored.Address)
-	// Даты можно сравнить строками или через встроенные форматы
 	assert.Equal(t, parcel.CreatedAt, stored.CreatedAt)
-}
 
-// TestStateChange проверяет цепочку изменений статуса
-func TestStateChange(t *testing.T) {
-	store := InitTestStore(t)
-
-	parcel := Parcel{
-		Client:    1002,
-		Status:    ParcelStatusRegistered,
-		Address:   "Адрес для статусов",
-		CreatedAt: time.Now().Format(time.RFC3339),
-	}
-
-	id, err := store.Add(parcel)
-	require.NoError(t, err)
-
-	// Меняем статус на sent
-	err = store.SetStatus(id, ParcelStatusSent)
-	require.NoError(t, err)
-
-	// Проверяем, что статус изменился в БД
-	p, err := store.Get(id)
-	require.NoError(t, err)
-	assert.Equal(t, ParcelStatusSent, p.Status)
-}
-
-// TestSetAddress проверяет изменение адреса
-func TestSetAddress(t *testing.T) {
-	store := InitTestStore(t)
-
-	parcel := Parcel{
-		Client:    1003,
-		Status:    ParcelStatusRegistered,
-		Address:   "Старый адрес",
-		CreatedAt: time.Now().Format(time.RFC3339),
-	}
-
-	id, err := store.Add(parcel)
-	require.NoError(t, err)
-
-	// Меняем адрес
-	newAddress := "Новый адрес"
-	err = store.SetAddress(id, newAddress)
-	require.NoError(t, err)
-
-	// Проверяем изменения
-	p, err := store.Get(id)
-	require.NoError(t, err)
-	assert.Equal(t, newAddress, p.Address)
-}
-
-// TestDelete проверяет удаление посылки
-func TestDelete(t *testing.T) {
-	store := InitTestStore(t)
-
-	parcel := Parcel{
-		Client:    1004,
-		Status:    ParcelStatusRegistered,
-		Address:   "Адрес под удаление",
-		CreatedAt: time.Now().Format(time.RFC3339),
-	}
-
-	id, err := store.Add(parcel)
-	require.NoError(t, err)
-
-	// Удаляем
+	// delete
 	err = store.Delete(id)
 	require.NoError(t, err)
 
-	// Проверяем, что при попытке получить выдает ошибку sql.ErrNoRows
 	_, err = store.Get(id)
 	assert.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+// TestSetAddress проверяет обновление адреса
+func TestSetAddress(t *testing.T) {
+	// prepare
+	store := initTestStore(t)
+	parcel := getTestParcel()
+
+	// add
+	id, err := store.Add(parcel)
+	require.NoError(t, err)
+	require.NotEmpty(t, id)
+
+	// set address
+	newAddress := "new test address"
+	err = store.SetAddress(id, newAddress)
+	require.NoError(t, err)
+
+	// check
+	stored, err := store.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, newAddress, stored.Address)
+}
+
+// TestSetStatus проверяет обновление статуса
+func TestSetStatus(t *testing.T) {
+	// prepare
+	store := initTestStore(t)
+	parcel := getTestParcel()
+
+	// add
+	id, err := store.Add(parcel)
+	require.NoError(t, err)
+	require.NotEmpty(t, id)
+
+	// set status
+	err = store.SetStatus(id, ParcelStatusSent)
+	require.NoError(t, err)
+
+	// check
+	stored, err := store.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, ParcelStatusSent, stored.Status)
+}
+
+// TestGetByClient проверяет получение посылок по идентификатору клиента
+func TestGetByClient(t *testing.T) {
+	// prepare
+	store := initTestStore(t)
+
+	parcels := []Parcel{
+		getTestParcel(),
+		getTestParcel(),
+		getTestParcel(),
+	}
+	parcelMap := map[int]Parcel{}
+
+	// задаём всем посылкам один и тот же идентификатор клиента
+	client := randRange.Intn(10_000_000)
+	parcels[0].Client = client
+	parcels[1].Client = client
+	parcels[2].Client = client
+
+	// add
+	for i := 0; i < len(parcels); i++ {
+		id, err := store.Add(parcels[i])
+		require.NoError(t, err)
+		require.NotEmpty(t, id)
+
+		// обновляем идентификатор добавленной у посылки
+		parcels[i].Number = id
+
+		// сохраняем добавленную посылку в структуру map, чтобы её можно было легко достать по идентификатору посылки
+		parcelMap[id] = parcels[i]
+	}
+
+	// get by client
+	storedParcels, err := store.GetByClient(client)
+	require.NoError(t, err)
+	require.Equal(t, len(parcels), len(storedParcels))
+
+	// check
+	for _, parcel := range storedParcels {
+		expected, ok := parcelMap[parcel.Number]
+		require.True(t, ok)
+		assert.Equal(t, expected.Client, parcel.Client)
+		assert.Equal(t, expected.Status, parcel.Status)
+		assert.Equal(t, expected.Address, parcel.Address)
+		assert.Equal(t, expected.CreatedAt, parcel.CreatedAt)
+	}
 }
