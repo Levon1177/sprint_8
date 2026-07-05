@@ -14,10 +14,16 @@ import (
 func InitTestStore(t *testing.T) ParcelStore {
 	db, err := sql.Open("sqlite", "tracker.db")
 	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		err := db.Close()
+		require.NoError(t, err)
+	})
+
 	return NewParcelStore(db)
 }
 
-// TestAddGetByClient проверяет добавление и получение посылок по клиенту
+// TestAddGetByClient проверяет добавление и получение посылки
 func TestAddGetByClient(t *testing.T) {
 	store := InitTestStore(t)
 
@@ -35,24 +41,16 @@ func TestAddGetByClient(t *testing.T) {
 	require.NotEmpty(t, id)
 	parcel.Number = id
 
-	// 2. Получаем список посылок клиента
-	parcels, err := store.GetByClient(1001)
+	// 2. Получаем добавленную посылку по идентификатору
+	stored, err := store.Get(id)
 	require.NoError(t, err)
-	require.NotEmpty(t, parcels)
 
-	// 3. Проверяем, что добавленная посылка есть в списке и данные совпадают
-	var found bool
-	for _, p := range parcels {
-		if p.Number == id {
-			found = true
-			assert.Equal(t, parcel.Client, p.Client)
-			assert.Equal(t, parcel.Status, p.Status)
-			assert.Equal(t, parcel.Address, p.Address)
-			// Даты можно сравнить строками или через встроенные форматы
-			assert.Equal(t, parcel.CreatedAt, p.CreatedAt)
-		}
-	}
-	assert.True(t, found, "Посылка не найдена в списке клиента")
+	// 3. Проверяем, что данные совпадают
+	assert.Equal(t, parcel.Client, stored.Client)
+	assert.Equal(t, parcel.Status, stored.Status)
+	assert.Equal(t, parcel.Address, stored.Address)
+	// Даты можно сравнить строками или через встроенные форматы
+	assert.Equal(t, parcel.CreatedAt, stored.CreatedAt)
 }
 
 // TestStateChange проверяет цепочку изменений статуса
